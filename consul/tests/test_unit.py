@@ -671,3 +671,332 @@ def test_config(test_case, extra_config, expected_http_kwargs, mocker):
         }
         http_wargs.update(expected_http_kwargs)
         mock_session.get.assert_called_with('/v1/status/leader', **http_wargs)
+
+
+@pytest.mark.parametrize(
+    'include_service_name_in_tag_key, should_have_service_specific_tags',
+    [
+        pytest.param(True, True, id="include_service_name_in_tag_key enabled (default behavior)"),
+        pytest.param(False, False, id="include_service_name_in_tag_key disabled"),
+    ],
+)
+def test_include_service_name_in_tag_key(aggregator, include_service_name_in_tag_key, should_have_service_specific_tags):
+    """Test that include_service_name_in_tag_key configuration controls service-specific tag generation."""
+    config = consul_mocks.MOCK_CONFIG.copy()
+    config['include_service_name_in_tag_key'] = include_service_name_in_tag_key
+
+    consul_check = ConsulCheck(common.CHECK_NAME, {}, [config])
+    consul_mocks.mock_check(consul_check, consul_mocks._get_consul_mocks())
+    consul_check.check(None)
+
+    # Build expected tags based on configuration
+    base_tags = [
+        'consul_datacenter:dc1',
+        'consul_service_id:service-1',
+    ]
+
+    # Generic tags should always be present
+    expected_generic_tags = [
+        'consul_service_tag:active',
+        'consul_service_tag:standby',
+    ]
+
+    # Service-specific tags should only be present when include_service_name_in_tag_key=True
+    expected_service_specific_tags = []
+    if should_have_service_specific_tags:
+        expected_service_specific_tags = [
+            'consul_service-1_service_tag:active',
+            'consul_service-1_service_tag:standby',
+        ]
+
+    expected_tags = base_tags + expected_service_specific_tags + expected_generic_tags
+
+    # Verify the metrics contain the expected tags
+    aggregator.assert_metric('consul.catalog.nodes_up', value=4, tags=expected_tags)
+    aggregator.assert_metric('consul.catalog.nodes_passing', value=4, tags=expected_tags)
+    aggregator.assert_metric('consul.catalog.nodes_warning', value=0, tags=expected_tags)
+    aggregator.assert_metric('consul.catalog.nodes_critical', value=0, tags=expected_tags)
+
+
+def test_include_service_name_in_tag_key_default_behavior(aggregator):
+    """Test that the default behavior (include_service_name_in_tag_key=True) is preserved when config is not specified."""
+    config = consul_mocks.MOCK_CONFIG.copy()
+    # Intentionally not setting include_service_name_in_tag_key to test default
+
+    consul_check = ConsulCheck(common.CHECK_NAME, {}, [config])
+    consul_mocks.mock_check(consul_check, consul_mocks._get_consul_mocks())
+    consul_check.check(None)
+
+    # Verify that the default behavior includes service-specific tags
+    expected_tags = [
+        'consul_datacenter:dc1',
+        'consul_service_id:service-1',
+        'consul_service-1_service_tag:active',
+        'consul_service-1_service_tag:standby',
+        'consul_service_tag:active',
+        'consul_service_tag:standby',
+    ]
+
+    aggregator.assert_metric('consul.catalog.nodes_up', value=4, tags=expected_tags)
+
+
+def test_get_service_tags_method():
+    """Test the _get_service_tags static method directly to ensure it respects the include_service_name_in_tag_key parameter."""
+    from datadog_checks.consul.consul import ConsulCheck
+
+    service_name = "test-service"
+    service_tags = ["tag1", "tag2"]
+
+    # Test with include_service_name_in_tag_key=True (default)
+    result_with_service_name = ConsulCheck._get_service_tags(service_name, service_tags, include_service_name_in_tag_key=True)
+    expected_with_service_name = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:tag1',
+        'consul_service_tag:tag1',
+        'consul_test-service_service_tag:tag2',
+        'consul_service_tag:tag2',
+    ]
+    assert result_with_service_name == expected_with_service_name
+
+    # Test with include_service_name_in_tag_key=False
+    result_without_service_name = ConsulCheck._get_service_tags(service_name, service_tags, include_service_name_in_tag_key=False)
+    expected_without_service_name = [
+        'consul_service_id:test-service',
+        'consul_service_tag:tag1',
+        'consul_service_tag:tag2',
+    ]
+    assert result_without_service_name == expected_without_service_name
+
+    # Test default parameter (should be True)
+    result_default = ConsulCheck._get_service_tags(service_name, service_tags)
+    assert result_default == expected_with_service_name
+
+
+def test_allowed_service_tags_method():
+    """Test the _get_service_tags static method with allowed_service_tags filtering."""
+    from datadog_checks.consul.consul import ConsulCheck
+
+    service_name = "test-service"
+    service_tags = ["env=prod", "version=1.2.3", "team", "monitoring"]
+
+    # Test with no filtering (None - default behavior)
+    result_no_filter = ConsulCheck._get_service_tags(service_name, service_tags, allowed_service_tags=None)
+    expected_no_filter = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:env=prod',
+        'consul_service_tag:env=prod',
+        'consul_test-service_service_tag:version=1.2.3',
+        'consul_service_tag:version=1.2.3',
+        'consul_test-service_service_tag:team',
+        'consul_service_tag:team',
+        'consul_test-service_service_tag:monitoring',
+        'consul_service_tag:monitoring',
+    ]
+    assert result_no_filter == expected_no_filter
+
+    # Test with simple tag filtering
+    result_simple_filter = ConsulCheck._get_service_tags(service_name, service_tags, allowed_service_tags=["team", "monitoring"])
+    expected_simple_filter = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:team',
+        'consul_service_tag:team',
+        'consul_test-service_service_tag:monitoring',
+        'consul_service_tag:monitoring',
+    ]
+    assert result_simple_filter == expected_simple_filter
+
+    # Test with key-based filtering (for key=value tags)
+    result_key_filter = ConsulCheck._get_service_tags(service_name, service_tags, allowed_service_tags=["env", "version"])
+    expected_key_filter = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:env=prod',
+        'consul_service_tag:env=prod',
+        'consul_test-service_service_tag:version=1.2.3',
+        'consul_service_tag:version=1.2.3',
+    ]
+    assert result_key_filter == expected_key_filter
+
+    # Test with mixed filtering (exact matches and key matches)
+    result_mixed_filter = ConsulCheck._get_service_tags(service_name, service_tags, allowed_service_tags=["env", "team"])
+    expected_mixed_filter = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:env=prod',
+        'consul_service_tag:env=prod',
+        'consul_test-service_service_tag:team',
+        'consul_service_tag:team',
+    ]
+    assert result_mixed_filter == expected_mixed_filter
+
+    # Test case insensitive matching
+    result_case_insensitive = ConsulCheck._get_service_tags(service_name, ["ENV=PROD", "Team"], allowed_service_tags=["env", "team"])
+    expected_case_insensitive = [
+        'consul_service_id:test-service',
+        'consul_test-service_service_tag:ENV=PROD',
+        'consul_service_tag:ENV=PROD',
+        'consul_test-service_service_tag:Team',
+        'consul_service_tag:Team',
+    ]
+    assert result_case_insensitive == expected_case_insensitive
+
+    # Test with no matches - should only have consul_service_id
+    result_no_matches = ConsulCheck._get_service_tags(service_name, service_tags, allowed_service_tags=["nonexistent"])
+    expected_no_matches = ['consul_service_id:test-service']
+    assert result_no_matches == expected_no_matches
+
+    # Test combined with include_service_name_in_tag_key=False
+    result_combined = ConsulCheck._get_service_tags(service_name, service_tags, include_service_name_in_tag_key=False, allowed_service_tags=["env", "team"])
+    expected_combined = [
+        'consul_service_id:test-service',
+        'consul_service_tag:env=prod',
+        'consul_service_tag:team',
+    ]
+    assert result_combined == expected_combined
+
+
+@pytest.mark.parametrize(
+    'allowed_service_tags, expected_service_tags',
+    [
+        pytest.param(None, ['active', 'standby', 'env=prod', 'version=1.2.3'], id="no filtering (None)"),
+        pytest.param(["active", "standby", "env=prod", "version=1.2.3"], ['active', 'standby', 'env=prod', 'version=1.2.3'], id="allow all existing tags"),
+        pytest.param(["active"], ['active'], id="allow only active tag"),
+        pytest.param(["env=prod"], ['env=prod'], id="allow only env=prod tag"),
+        pytest.param(["env", "version"], ['env=prod', 'version=1.2.3'], id="allow key-based matching for key=value tags"),
+        pytest.param(["active", "env"], ['active', 'env=prod'], id="mixed simple and key=value tags"),
+        pytest.param(["nonexistent"], [], id="allow no existing tags"),
+        pytest.param(["ACTIVE"], ['active'], id="case insensitive matching"),
+        pytest.param(["ENV"], ['env=prod'], id="case insensitive key matching for key=value tags"),
+    ],
+)
+def test_allowed_service_tags_integration(aggregator, allowed_service_tags, expected_service_tags):
+    """Test that allowed_service_tags configuration filters tags in the full integration."""
+    config = consul_mocks.MOCK_CONFIG.copy()
+    config['allowed_service_tags'] = allowed_service_tags
+
+    consul_check = ConsulCheck(common.CHECK_NAME, {}, [config])
+
+    # Use enhanced mocks with key=value tags
+    enhanced_mocks = consul_mocks._get_consul_mocks().copy()
+    enhanced_mocks['get_services_in_cluster'] = consul_mocks.mock_get_services_in_cluster_with_key_value_tags
+    enhanced_mocks['get_nodes_with_service'] = consul_mocks.mock_get_nodes_with_service_with_key_value_tags
+
+    consul_mocks.mock_check(consul_check, enhanced_mocks)
+    consul_check.check(None)
+
+    # Build expected tags for all metrics that should have filtered service tags
+    base_tags = [
+        'consul_datacenter:dc1',
+        'consul_service_id:service-1',
+    ]
+
+    # Add expected service-specific tags (with service name in key)
+    service_specific_tags = [f'consul_service-1_service_tag:{tag}' for tag in expected_service_tags]
+
+    # Add expected generic service tags
+    generic_service_tags = [f'consul_service_tag:{tag}' for tag in expected_service_tags]
+
+    expected_tags = base_tags + service_specific_tags + generic_service_tags
+    expected_tags_set = set(expected_tags)
+
+    # List of metric names that should have filtered service tags
+    service_tag_metrics = [
+        'consul.catalog.nodes_up',
+        'consul.catalog.nodes_passing',
+        'consul.catalog.nodes_warning',
+        'consul.catalog.nodes_critical'
+    ]
+
+    # Verify tag filtering is applied to all relevant metrics
+    for metric_name in service_tag_metrics:
+        metrics = aggregator._metrics.get(metric_name, [])
+        assert len(metrics) > 0, f"Expected at least one {metric_name} metric"
+
+        # Check that all instances of this metric have the expected filtered tags
+        for metric in metrics:
+            # Only check metrics for service-1 (our test service with key=value tags)
+            if 'consul_service_id:service-1' in metric.tags:
+                actual_tags = set(metric.tags)
+                assert actual_tags == expected_tags_set, (
+                    f"Metric {metric_name} has incorrect tags. "
+                    f"Expected: {expected_tags_set}, "
+                    f"Got: {actual_tags}. "
+                    f"Missing: {expected_tags_set - actual_tags}, "
+                    f"Extra: {actual_tags - expected_tags_set}"
+                )
+
+    # Also check consul.catalog.services_count which now respects include_service_name_in_tag_key
+    services_count_metrics = aggregator._metrics.get('consul.catalog.services_count', [])
+    if services_count_metrics:
+        # Collect all service-specific tags from all service-1 metrics
+        all_actual_service_specific_tags = set()
+        service_1_metrics_found = 0
+
+        for metric in services_count_metrics:
+            if 'consul_service_id:service-1' in metric.tags:
+                service_1_metrics_found += 1
+                actual_tags = set(metric.tags)
+                # services_count metrics only have service-specific tags (consul_service-1_service_tag:xxx)
+                # when include_service_name_in_tag_key is True (default), otherwise no service tags
+                service_specific_tags_found = {tag for tag in actual_tags if tag.startswith('consul_service-1_service_tag:')}
+                all_actual_service_specific_tags.update(service_specific_tags_found)
+
+        # Check that we found some service-1 metrics
+        assert service_1_metrics_found > 0, "Expected at least one consul.catalog.services_count metric for service-1"
+
+        expected_service_specific_tags = {f'consul_service-1_service_tag:{tag}' for tag in expected_service_tags}
+
+        # Check that the union of all service-specific tags matches what we expect
+        assert all_actual_service_specific_tags == expected_service_specific_tags, (
+            f"Metric consul.catalog.services_count has incorrect service-specific tags. "
+            f"Expected: {expected_service_specific_tags}, "
+            f"Got: {all_actual_service_specific_tags}. "
+            f"Missing: {expected_service_specific_tags - all_actual_service_specific_tags}, "
+            f"Extra: {all_actual_service_specific_tags - expected_service_specific_tags}"
+        )
+
+
+def test_allowed_service_tags_default_behavior(aggregator):
+    """Test allowed_service_tags default behavior (None) preserves all tags."""
+    config = consul_mocks.MOCK_CONFIG.copy()
+    # Intentionally not setting allowed_service_tags to test default (None)
+
+    consul_check = ConsulCheck(common.CHECK_NAME, {}, [config])
+    consul_mocks.mock_check(consul_check, consul_mocks._get_consul_mocks())
+    consul_check.check(None)
+
+    # Verify that the default behavior includes all service tags
+    expected_tags = [
+        'consul_datacenter:dc1',
+        'consul_service_id:service-1',
+        'consul_service-1_service_tag:active',
+        'consul_service-1_service_tag:standby',
+        'consul_service_tag:active',
+        'consul_service_tag:standby',
+    ]
+
+    aggregator.assert_metric('consul.catalog.nodes_up', value=4, tags=expected_tags)
+
+
+def test_combined_configuration_options(aggregator):
+    """Test that include_service_name_in_tag_key and allowed_service_tags work together correctly."""
+    config = consul_mocks.MOCK_CONFIG.copy()
+    config['include_service_name_in_tag_key'] = False
+    config['allowed_service_tags'] = ['active']
+
+    consul_check = ConsulCheck(common.CHECK_NAME, {}, [config])
+    consul_mocks.mock_check(consul_check, consul_mocks._get_consul_mocks())
+    consul_check.check(None)
+
+    # When both options are configured:
+    # - include_service_name_in_tag_key=False: no service-specific tags
+    # - allowed_service_tags=['active']: only 'active' tag should be included
+    expected_tags = [
+        'consul_datacenter:dc1',
+        'consul_service_id:service-1',
+        'consul_service_tag:active',
+        # Should NOT have:
+        # - 'consul_service-1_service_tag:active' (due to include_service_name_in_tag_key=False)
+        # - 'consul_service_tag:standby' (due to allowed_service_tags=['active'])
+        # - 'consul_service-1_service_tag:standby' (both reasons)
+    ]
+
+    aggregator.assert_metric('consul.catalog.nodes_up', value=4, tags=expected_tags)

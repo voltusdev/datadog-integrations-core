@@ -72,10 +72,10 @@ instances:
     # network_latency_checks: false
 
     ## @param use_node_name_as_hostname - boolean - optional - default: true
-    ## Whether to use the Consul node name as the hostname. If set to true, 
-    ## the Agent uses the Consul node name as the hostname. If set to false, 
+    ## Whether to use the Consul node name as the hostname. If set to true,
+    ## the Agent uses the Consul node name as the hostname. If set to false,
     ## the Agent uses the system hostname and avoids duplicate hostnames.
-    ## Disabling this causes all the `consul.net.node.*` metrics to be reported 
+    ## Disabling this causes all the `consul.net.node.*` metrics to be reported
     ## under one host (the host that collects them), and they can be filtered using `consul_node_name`.
     #
     # use_node_name_as_hostname: true
@@ -135,6 +135,23 @@ instances:
     ## Increase the number of threads to collect consul services checks.
     #
     # threads_count: 1
+
+    ## @param allowed_service_tags - list of strings - optional
+    ## If set, only tags with keys matching this list will be sent to Datadog.
+    ## This is helpful if you have a lot of tags on services that are not
+    ## relevant to Datadog (ingress routing tags, etc). Tags should be specified
+    ## here in lowercase. Otherwise, the check will downcase tags from Consul
+    ## before comparing.
+    #
+    # allowed_service_tags:
+    #   - <TAG_1>
+    #   - <TAG_2>
+
+    ## @param include_service_name_in_tag_key - boolean - optional - default: false
+    ## Whether to produce additional service tags, which include the service
+    ## name in the tag key, for each service.
+    #
+    # include_service_name_in_tag_key: false
 
     ## @param disable_legacy_service_tag - boolean - optional - default: false
     ## Whether or not to stop submitting the tag `service` that has been renamed

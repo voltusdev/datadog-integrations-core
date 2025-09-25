@@ -389,3 +389,51 @@ def mock_get_cluster_leader_A():
 
 def mock_get_cluster_leader_B():
     return 'My New Leader'
+
+
+def mock_get_services_in_cluster_with_key_value_tags():
+    """Mock services with key=value tags for enhanced testing."""
+    return {
+        "service-1": ["active", "standby", "env=prod", "version=1.2.3"],
+        "service-2": ["active", "standby"],
+        "service-3": ["active", "standby"],
+        "service-4": ["active", "standby"],
+        "service-5": ["active", "standby"],
+        "service-6": ["active", "standby"],
+    }
+
+
+def mock_get_nodes_with_service_with_key_value_tags(service):
+    """Mock nodes with key=value tags for enhanced testing."""
+    nodes = [
+        {
+            "Checks": [
+                {
+                    "CheckID": "serfHealth",
+                    "Name": "Serf Health Status",
+                    "Node": "node-1",
+                    "Notes": "",
+                    "Output": "Agent alive and reachable",
+                    "ServiceID": "",
+                    "ServiceName": "",
+                    "Status": "passing",
+                },
+                {
+                    "CheckID": "service:{}".format(service),
+                    "Name": "service check {}".format(service),
+                    "Node": "node-1",
+                    "Notes": "",
+                    "Output": "Service {} alive".format(service),
+                    "ServiceID": service,
+                    "ServiceName": "",
+                    "Status": "passing",
+                },
+            ],
+            "Node": {"Address": _get_random_ip(), "Node": "node-1"},
+            "Service": {"Address": "", "ID": service, "Port": 80, "Service": service, "Tags": ["standby"]},
+        }
+        for _ in range(4)
+    ]
+
+    nodes[0]['Service']['Tags'] = ['active', 'standby', 'env=prod', 'version=1.2.3']
+    return nodes

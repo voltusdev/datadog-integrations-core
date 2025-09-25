@@ -114,6 +114,12 @@ class ConsulCheck(OpenMetricsBaseCheck):
         self.collect_health_checks = self.instance.get(
             'collect_health_checks', self.init_config.get('collect_health_checks', False)
         )
+        self.include_service_name_in_tag_key = is_affirmative(
+            self.instance.get('include_service_name_in_tag_key', self.init_config.get('include_service_name_in_tag_key', True))
+        )
+        self.allowed_service_tags = self.instance.get(
+            'allowed_service_tags', self.init_config.get('allowed_service_tags', None)
+        )
 
         if self.threads_count > 1:
             self.thread_pool = ThreadPool(self.threads_count)
@@ -320,11 +326,39 @@ class ConsulCheck(OpenMetricsBaseCheck):
         return services
 
     @staticmethod
-    def _get_service_tags(service, tags):
+    def _filter_service_tags(tags, allowed_service_tags):
+        """Filter service tags based on allowed_service_tags configuration."""
+        if allowed_service_tags is None:
+            return tags
+
+        filtered_tags = []
+        for tag in tags:
+            tag_lower = tag.lower()
+            # Check if tag matches any allowed patterns
+            # Support both key=value tags and simple tags
+            tag_allowed = False
+            for allowed_tag in allowed_service_tags:
+                allowed_tag_lower = allowed_tag.lower()
+                # Check for exact match or key match (for key=value tags)
+                if tag.lower() == allowed_tag_lower or tag_lower.startswith(allowed_tag_lower + '='):
+                    tag_allowed = True
+                    break
+
+            if tag_allowed:
+                filtered_tags.append(tag)
+
+        return filtered_tags
+
+    @staticmethod
+    def _get_service_tags(service, tags, include_service_name_in_tag_key=True, allowed_service_tags=None):
         service_tags = ['consul_service_id:{}'.format(service)]
 
-        for tag in tags:
-            service_tags.append('consul_{}_service_tag:{}'.format(service, tag))
+        # Apply filtering first
+        filtered_tags = ConsulCheck._filter_service_tags(tags, allowed_service_tags)
+
+        for tag in filtered_tags:
+            if include_service_name_in_tag_key:
+                service_tags.append('consul_{}_service_tag:{}'.format(service, tag))
             service_tags.append('consul_service_tag:{}'.format(tag))
 
         return service_tags
@@ -495,10 +529,14 @@ class ConsulCheck(OpenMetricsBaseCheck):
                     )
 
             for node_status, count in nodes_per_service_tag_counts.items():
-                service_tags = [
-                    'consul_{}_service_tag:{}'.format(node_status.service_name, tag)
-                    for tag in node_status.service_tags_set
-                ]
+                # Apply filtering to service tags for services_count metric
+                filtered_service_tags = self._filter_service_tags(list(node_status.service_tags_set), self.allowed_service_tags)
+
+                service_tags = []
+                if self.include_service_name_in_tag_key:
+                    for tag in filtered_service_tags:
+                        service_tags.append('consul_{}_service_tag:{}'.format(node_status.service_name, tag))
+
                 service_tags.append('consul_service_id:{}'.format(node_status.service_name))
                 service_tags.append('consul_node_id:{}'.format(node_status.node_id))
                 service_tags.append('consul_status:{}'.format(node_status.status))
@@ -523,7 +561,7 @@ class ConsulCheck(OpenMetricsBaseCheck):
         # `consul.catalog.nodes_passing` : # of Nodes with service status `passing` from those registered
         # `consul.catalog.nodes_warning` : # of Nodes with service status `warning` from those registered
         # `consul.catalog.nodes_critical` : # of Nodes with service status `critical` from those registered
-        all_service_tags = self._get_service_tags(service, service_tags)
+        all_service_tags = self._get_service_tags(service, service_tags, self.include_service_name_in_tag_key, self.allowed_service_tags)
         # {'up': 0, 'passing': 0, 'warning': 0, 'critical': 0}
         node_count_per_status = defaultdict(int)
         for node in nodes_with_service:

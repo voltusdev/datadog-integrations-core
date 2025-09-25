@@ -44,6 +44,10 @@ def instance_empty_default_hostname():
     return False
 
 
+def instance_include_service_name_in_tag_key():
+    return False
+
+
 def instance_kerberos_auth():
     return 'disabled'
 
