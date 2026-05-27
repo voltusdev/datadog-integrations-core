@@ -62,6 +62,7 @@ class InstanceConfig(BaseModel):
     )
     acl_token: Optional[str] = None
     allow_redirects: Optional[bool] = None
+    allowed_service_tags: Optional[tuple[str, ...]] = None
     auth_token: Optional[AuthToken] = None
     auth_type: Optional[str] = None
     aws_host: Optional[str] = None
@@ -76,6 +77,7 @@ class InstanceConfig(BaseModel):
     enable_legacy_tags_normalization: Optional[bool] = None
     extra_headers: Optional[MappingProxyType[str, Any]] = None
     headers: Optional[MappingProxyType[str, Any]] = None
+    include_service_name_in_tag_key: Optional[bool] = None
     kerberos_auth: Optional[Literal['required', 'optional', 'disabled']] = None
     kerberos_cache: Optional[str] = None
     kerberos_delegate: Optional[bool] = None
