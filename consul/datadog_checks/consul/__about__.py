@@ -2,4 +2,5 @@
 # All rights reserved
 # Licensed under a 3-clause BSD style license (see LICENSE)
 
-__version__ = "5.4.0"
+# VOLTUS PATCHED
+__version__ = "5.4.1"
